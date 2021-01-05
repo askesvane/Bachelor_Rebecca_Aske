@@ -1,0 +1,764 @@
+---
+title: "aske_rebecca_experiment3"
+author: "Aske & Rebecca"
+date: "7 October 2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# Load packages
+library(pacman)
+p_load(tidyverse, brms, ggbeeswarm, loo)
+
+
+# set WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp3_data")
+
+# import data from several csv files
+fileList3 <- list.files(full.names = T, pattern =".csv")
+list <- lapply(fileList3, read_csv)
+d3 <- do.call(rbind, list)
+
+# Create csv in shared folder
+write.csv(d3,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp3_collected_data.csv", row.names = FALSE)
+
+
+
+
+## For ID 56-60
+
+# set WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp3_data/1-6")
+
+# import data from several csv files
+fileList3.2 <- list.files(full.names = T, pattern =".csv")
+list2 <- lapply(fileList3.2, read_csv)
+d3.2 <- do.call(rbind, list2)
+
+
+```
+
+
+Check data
+```{r}
+# set wd
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske")
+
+d3_old <- read_csv("exp3_collected_data.csv")
+
+# Check datapoints per participants
+check <- d3_old %>% group_by(drawing, generation) %>% summarize(n())
+names(check)[3] <- "count"
+check %>% filter(count != 60)
+# Correct number of rows for each generation
+
+check <- d3_old %>% group_by(ID, drawing, generation) %>% summarize(n())
+names(check)[4] <- "count"
+check %>% filter(count != 6)
+# Correct number of rows for each drawing/ID/generation
+check
+
+```
+
+
+Merge with similarity scores
+```{r}
+
+# load data
+similarityScores <- read_csv("SimilarityData.csv")
+
+# remove 0's in ID column
+similarityScores$ID = str_remove(similarityScores$ID, "^0+")
+
+# merge
+d3 <- merge(d3_old, similarityScores, by=c("ID","drawing")) 
+
+# check
+check <- d3 %>% group_by(ID) %>% summarise(
+  pictures = length(unique(drawing))
+)
+
+
+# remove unnecesary columns
+d3$X1.x <- NULL
+d3$X1.y <- NULL
+
+
+```
+
+Make new df for the last 6 participants (incl. similarity scores)
+```{r}
+# load data
+similarityScores_1to5 <- read_csv("SimilarityData_1to5.csv")
+
+# merge
+d3.2_merged <- merge(d3.2, similarityScores_1to5, by=c("ID","drawing")) 
+
+# check
+d3.2_merged %>% group_by(ID) %>% summarise(
+  pictures = length(unique(drawing))
+)
+
+
+# remove unnecesary columns
+d3.2_merged$X1.x <- NULL
+d3.2_merged$X1.y <- NULL
+
+```
+
+Gather the 2 df
+```{r}
+
+# change participant number before merging
+d3.2_merged$ID <- d3.2_merged$ID + 55
+
+# rbind them
+d3 <- rbind(d3,d3.2_merged)
+
+# Create csv in shared folder
+write.csv(d3,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp3_collected_data_preprocessed.csv", row.names = FALSE)
+
+```
+
+
+# ANALYSIS
+
+Prepare parameters
+```{r}
+
+d3 <- read_csv("exp3_collected_data_preprocessed.csv")
+
+# standardize generation parameter to be -1, 0, and 1.
+d3$generation <- factor(d3$generation, levels = c(1, 4, 8))
+d3$generationL = as.numeric(d3$generation)
+d3$generationL <- d3$generationL - 2
+
+# Transform MSE so that it is on a 0-1 scale
+d3$MSE_s = d3$MSE - min(d3$MSE)
+d3$MSE_s = d3$MSE_s / max(d3$MSE_s)
+
+# fairly normally distributed
+hist(d3$MSE_s)
+
+```
+
+
+# Modelling
+
+## Predicting error MSE from generation
+
+linear and quadratic models (prior and posterior)
+```{r}
+
+# define chains, iter, and controls
+CHAINS = 4
+CORES = 2
+ITER = 4e3
+
+CONTROLS = list(
+  max_treedepth = 20,
+  adapt_delta=0.99)
+
+# make subset
+sub <- c(6, 7, 8, 9, 10)
+
+
+# Construct models
+formula3.1 <- bf(MSE_s ~ 1 + generationL + (1 + generationL | ID) + (1 | drawing))
+formula3.2 <- bf(MSE_s ~ 1 + generationL + I(generationL)^2 + (1 + generationL + I(generationL)^2 | ID) + (1 | drawing))
+
+# get priors to be set
+get_prior(formula3.1, d3, family = "gaussian")
+
+# set priors
+prior <- c(
+  prior(normal(0,.3), class = Intercept),
+  prior(normal(0,.1), class = b),
+  prior(normal(0,.05), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+
+
+
+### MODEL 1
+
+# Run model based on priors alone
+m3.1_prior <- brm(
+   formula3.1,
+   data = subset(d3, ID %in% sub),
+   family = gaussian,
+   prior = prior,
+   sample_prior = "only",
+   iter = ITER,
+   warmup = 1000,
+   chains = CHAINS,
+   cores = 1,
+   control = CONTROLS
+)
+
+# prior predictive check
+pp_check(m3.1_prior, nsamples=100)
+
+# Run model
+m3.1 <- brm(
+   formula3.1,
+   data = d3, # subset(d3, ID %in% sub)
+   family = gaussian,
+   prior = prior,
+   sample_prior = TRUE,
+   iter = ITER,
+   warmup = 1000,
+   chains = CHAINS,
+   cores = CORES,
+   control = CONTROLS
+)
+
+# prior predictive check
+pp_check(m3.1, nsamples=100)
+
+## Add LOO for model comparison
+m3.1 <- add_criterion(m3.1, criterion = c("waic","loo"))
+
+
+
+### MODEL 2
+
+# prior model
+m3.2_prior <- brm(
+  formula3.2,
+  data = subset(d3, ID %in% sub),
+  family = gaussian,
+  prior = prior,
+  sample_prior = "only",
+  chains = CHAINS,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# prior predictive check
+pp_check(m3.2_prior, nsamples=100)
+
+
+# posterior model
+m3.2 <- brm(
+  formula3.2,
+  data = d3, # subset(d3, ID %in% sub)
+  family = gaussian,
+  prior = prior,
+  sample_prior = TRUE,
+  chains = CHAINS,
+  warmup = 1000,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.2, nsamples=100)
+
+## Add LOO for model comparison
+m3.2 <- add_criterion(m3.2, criterion = c("waic","loo"))
+
+#save(m3.1, m3.2, file = "Models/Exp3_ErrorModels")
+
+
+```
+
+Report models (m3.1 is the best of them)
+```{r}
+# Summaries
+summary(m3.1)
+summary(m3.2)
+
+# Model comparison
+compare1 <- loo_compare(m3.1, m3.2)
+weights1 <- loo_model_weights(m3.1, m3.2) 
+
+compare1
+weights1
+
+
+
+
+# Summarizing and visualizing results
+hypothesis(m3.1,"generationL<0")
+hypothesis(m3.2,"generationL<0")
+hypothesis(m3.2,"IgenerationL<0")
+
+# Estimates with more decimals
+fixef(m3.1)
+fixef(m3.2)
+
+# Plot models
+plot(hypothesis(m3.1,"generationL<0"))
+plot(hypothesis(m3.2,"generationL<0"))
+conditional_effects(m3.1)
+conditional_effects(m3.2)
+
+plot(conditional_effects(m3.1), points=T, rug=T)[[1]] + theme_classic()
+
+# Plot trace plots
+plot(m3.1)
+plot(m3.2)
+
+```
+
+
+model 3.1 (best from Loo comparison)
+model 3.2 
+
+--> proceed with the most simple (bad) model by adding chain as fixed effect to control for it + Interaction model.
+
+
+
+## Control 
+
+
+### Control analysis for Chain
+Note: controlling for site did not improve the model in Tylén et al.
+
+Pre-process the data --> make new chain column
+```{r}
+
+# Make chain group column
+d3$chainGroup <- NA
+for (i in (1:nrow(d3))){
+  
+  if (d3$ID[i] <= 5) {
+    d3$chainGroup[i] <- 1
+    
+  } else if (d3$ID[i] > 5 & d3$ID[i] < 11) {
+    d3$chainGroup[i] <- 2
+    
+  } else if (d3$ID[i] > 10 & d3$ID[i] < 16) {
+    d3$chainGroup[i] <- 3
+    
+  } else if (d3$ID[i] > 15 & d3$ID[i] < 21) {
+    d3$chainGroup[i] <- 4
+    
+  } else if (d3$ID[i] > 20 & d3$ID[i] < 26) {
+    d3$chainGroup[i] <- 5
+    
+  } else if (d3$ID[i] > 25 & d3$ID[i] < 31) {
+    d3$chainGroup[i] <- 6
+    
+  } else if (d3$ID[i] > 30 & d3$ID[i] < 36) {
+    d3$chainGroup[i] <- 7
+    
+  } else if (d3$ID[i] > 35 & d3$ID[i] < 41) {
+    d3$chainGroup[i] <- 8
+    
+  } else if (d3$ID[i] > 40 & d3$ID[i] < 46) {
+    d3$chainGroup[i] <- 9
+    
+  } else if (d3$ID[i] > 45 & d3$ID[i] < 51) {
+    d3$chainGroup[i] <- 10
+    
+  } else if (d3$ID[i] > 50 & d3$ID[i] < 56) {
+    d3$chainGroup[i] <- 11
+    
+  } else { # In case we add 56-61 (which had the pictures from group 1)
+    d3$chainGroup[i] <- 1
+  }
+}
+
+
+# move df to old df
+d3$chain <- as.character(d3$chain)
+d3_old <- d3
+
+# Create empty df
+d3 <- d3[0,]
+
+# Use chain group column to loop through them one by one and overwrite chains with a dummy.
+for (i in 1:length(unique(d3_old$chainGroup))){
+  
+  # subset data
+  sub <- d3_old %>% subset(chainGroup == i)
+  
+  sub$chainD <- sub$chain
+  
+  # change chains to a dummy by chaingroup
+  sub$chainD <- as.numeric(as.factor(sub$chainD))
+  sub$chainD <- sub$chainD - 1
+  
+  # Combine with premade empty dataframe
+  if (nrow(d3) == 0) {
+    d3 <- sub
+    } else {
+        d3 <- rbind(d3, sub)}
+
+}
+
+
+
+
+# change chain to be a factor
+d3$chainD <- as.factor(d3$chainD)
+
+```
+
+Run 2 models controlling for Chain (fixed affect and interaction effect models)
+```{r}
+
+# define models including chain (corresponding to site - Blombos & Diepkloof)
+formula3.3 <-  bf(MSE_s ~ 1 + generationL + chainD + 
+                    (1 + generationL + chainD | ID) + 
+                    (1 | drawing))
+
+formula3.4 <-  bf(MSE_s ~ 1 + generationL * chainD + 
+                    (1 + generationL * chainD | ID) + 
+                    (1 | drawing))
+
+
+### Model 5
+m3.3 <- brm(
+  formula3.3,
+  data = d3,
+  family = gaussian,
+  prior = prior,  
+  sample_prior = TRUE,
+  chains = CHAINS,
+  warmup = 1000,
+  cores = CORES,
+  iter=ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.3, nsamples=100)
+
+# Add LOO for model comparison
+m3.3 <- add_criterion(m3.3, criterion = c("waic","loo"))
+
+
+
+### Model 5
+m3.4 <- brm(
+  formula3.4,
+  data = d3,
+  family = gaussian,
+  prior = prior,  
+  sample_prior = TRUE,
+  chains = CHAINS,
+  warmup = 1000,
+  cores = CORES,
+  iter=ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.4, nsamples=100)
+
+## Add LOO for model comparison
+m3.4 <- add_criterion(m3.4, criterion = c("waic","loo"))
+
+```
+
+Report the winning model
+```{r}
+# Summary
+summary(m3.3)
+summary(m3.4)
+
+
+# Model comparison
+compare2 <- loo_compare(m3.1, m3.2, m3.3, m3.4)
+weights2 <- loo_model_weights(m3.1, m3.2, m3.3, m3.4)
+
+compare2
+weights2
+
+
+# Summarizing and visualizing results
+hypothesis(m3.3,"generationL<0")
+hypothesis(m3.4,"generationL<0")
+
+hypothesis(m3.4,"chainD1 < 0")
+hypothesis(m3.4,"generationL:chainD1 > 0")
+
+
+# Estimates with more decimals
+fixef(m3.3)
+fixef(m3.4)
+
+# Plot models
+plot(hypothesis(m3.3,"generationL<0"))
+plot(hypothesis(m3.4,"generationL<0"))
+conditional_effects(m3.3)
+conditional_effects(m3.4)
+
+
+# Plot trace plots
+plot(m3.3)
+plot(m3.4)
+
+```
+
+When controlling for chain by adding it as a fixed effect interacting with generation, we found a small negative effect of generation in the hypothesised direction.
+Furthermore, we found a significant effect of the interaction between generation and chain --> when accounting for the fact that the symbols originated from two different chain groups (different symbols reproduced by different people), we unmasked a significant effect of generation in the hypothesised direction.
+
+
+### Compare when excluding problematic pictures (to be done)
+
+list of problematic stimuli (subjectively selected by Aske)
+```{r}
+problemPics <- c("i3_c104_g8_id16", "i3_c104_g4_id12", "i3_c104_g1_id9",
+                 "i4_c102_g4_id15", "i4_c102_g8_id315", "i4_c102_g1_",
+                 "i4_c108_g4_id48", "i4_c108_g8_id52", "i4_c108_g1_id45",
+                 "i3_c103_g8_id8", "i3_c103_g4_id4", "i3_c103_g1_id1")
+
+d3sub <- subset(d3, !drawing %in% problemPics)
+
+```
+
+Run on model 3.1 and 3.2 --> I call them 3.5 and 3.6
+```{r}
+
+
+### MODEL 5 (without problematic pictures)
+
+# posterior model
+m3.5 <- brm(
+  formula3.1,
+  data = subset(d3, !drawing %in% problemPics), 
+  family = gaussian,
+  prior = prior,
+  sample_prior = TRUE,
+  warmup = 1000,
+  chains = CHAINS,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.5, nsamples=100)
+
+## Add LOO for model comparison
+m3.5 <- add_criterion(m3.5, criterion = c("waic","loo"))
+
+
+
+
+### MODEL 6 (without problematic pictures)
+
+# posterior model
+m3.6 <- brm(
+  formula3.2,
+  data = subset(d3, !drawing %in% problemPics), 
+  family = gaussian,
+  prior = prior,
+  sample_prior = TRUE,
+  chains = CHAINS,
+  warmup = 1000,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.6, nsamples=100)
+
+## Add LOO for model comparison
+m3.6 <- add_criterion(m3.6, criterion = c("waic","loo"))
+
+
+
+# Compare to the original models
+compare3 <- loo_compare(m3.5, m3.6)
+weights3 <- loo_model_weights(m3.5, m3.6) 
+weights3
+
+# Summarizing and visualizing results
+summary(m3.5)
+summary(m3.6)
+
+
+```
+
+Run on model 3.3 and 3.4 --> I call them 3.7 and 3.8
+```{r}
+
+### MODEL 7 (without problematic pictures)
+
+# posterior model
+m3.7 <- brm(
+  formula3.3,
+  data = subset(d3, !drawing %in% problemPics), 
+  family = gaussian,
+  prior = prior,
+  sample_prior = TRUE,
+  warmup = 1000,
+  chains = CHAINS,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.7, nsamples=100)
+
+## Add LOO for model comparison
+m3.7 <- add_criterion(m3.7, criterion = c("waic","loo"))
+
+
+
+
+### MODEL 8 (without problematic pictures)
+
+# posterior model
+m3.8 <- brm(
+  formula3.4,
+  data = subset(d3, !drawing %in% problemPics), 
+  family = gaussian,
+  prior = prior,
+  sample_prior = TRUE,
+  chains = CHAINS,
+  warmup = 1000,
+  iter = ITER,
+  control = CONTROLS
+)
+
+# posterior predictive check
+pp_check(m3.4_prior, nsamples=100)
+
+## Add LOO for model comparison
+m3.8 <- add_criterion(m3.8, criterion = c("waic","loo"))
+
+
+
+
+
+# Compare to the original models
+exp3_compare4 <- loo_compare(m3.5, m3.7, m3.8)
+exp3_weights4 <- loo_model_weights(m3.5, m3.7, m3.8) 
+
+exp3_compare4
+exp3_weights4
+
+
+# Summarizing and visualizing results'
+summary(m3.3)
+summary(m3.4)
+
+q <- 3
+
+summary(m3.7)
+summary(m3.8)
+fixef(m3.8)
+
+
+summary(m3.4)
+hypothesis(m3.8,"generationL<0")
+hypothesis(m3.8,"chainD1<0")
+hypothesis(m3.8,"generationL:chainD1>0")
+
+
+```
+
+
+## THE FINAL MODEL TO BE REPORTED
+```{r}
+
+# summary
+summary(m3.4)
+
+# Model comparison LOOIC
+compare1 # m3.1 (simple model) is better than quadratic model
+weights1
+
+#model comparison of the best simple model and models controling for Chain
+compare3.5 <- loo_compare(m3.1, m3.3, m3.4)
+weights3.5 <- loo_model_weights(m3.1, m3.3, m3.4)
+
+compare5.5
+weights5.5
+
+
+# Hypothesis testing
+hypothesis(m3.4,"generationL<0")
+hypothesis(m3.4,"chainD1 < 0")
+hypothesis(m3.4,"generationL:chainD1 > 0")
+
+
+# Estimates with more decimals
+fixef(m3.4)
+
+
+# Plot model
+plot(hypothesis(m3.8,"generationL<0"))
+conditional_effects(m3.4)
+
+
+# Plot trace plot
+plot(m3.8)
+
+
+```
+
+
+
+# Plots
+```{r}
+
+library(pacman)
+p_load(extrafont)
+
+font_import(pattern="[T/t]imes")
+loadfonts(device="win")
+
+
+## Plot for the main manuscript
+
+dS_agg <- d3 %>% group_by(ID, generationL) %>% 
+  summarise(
+    meanError = mean(MSE_s)
+)
+
+dS_agg$ID = as.factor(dS_agg$ID)
+
+
+Exp3_MainPlot <- ggplot(dS_agg, aes(generationL, meanError)) + 
+  geom_line(aes(group=ID,color=ID),alpha=0.6) +
+  geom_point(aes(group=ID,color=ID),alpha=0.6)+
+  geom_smooth(method=lm, color = "red") +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = c(-1,0,1),labels=c("1st","4th","8th")) +
+  
+  # THEMES
+  theme_grey() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position="top",
+    plot.subtitle=element_text(face="italic",size=14,colour="grey40"),
+    plot.title=element_text(size=21,face="bold")) +
+  labs(title="\nExperiment 3",
+       subtitle="Memorability",
+       x=expression("Generation"),
+       y=expression("Average stimulus reproduction error")) +
+  NULL
+
+Exp3_MainPlot
+
+#ggsave("Exp3_MainPlot.svg", plot = Exp3_MainPlot)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

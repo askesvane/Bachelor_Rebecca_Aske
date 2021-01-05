@@ -1,0 +1,671 @@
+---
+title: "experiment1"
+author: "Aske & Rebecca"
+date: "6 October 2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+EXPERIMENT 1 - SALIENCY
+
+# Prepare data
+
+Load packages, data, wd etc. 
+```{r}
+# packages
+pacman::p_load(tidyverse,lmerTest,ggbeeswarm, lme4, dplyr, brms)
+
+citation("brms")
+citation("tidyverse")
+citation("dplyr")
+
+
+
+# WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp1_data")
+
+```
+
+Collect data from several csv files
+```{r}
+
+# import data from several csv files
+fileList1 <- list.files(full.names = T, pattern =".csv")
+d1 <- map_dfr(fileList1,read_csv)
+
+```
+
+Include ID 56-61
+```{r}
+# setwd
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp1_data/1-6")
+
+# import data from several csv files
+fileList1.1 <- list.files(full.names = T, pattern =".csv")
+d1.1 <- map_dfr(fileList1.1,read_csv)
+
+# Change ID before merging
+d1.1$Participant <- d1.1$Participant + 55
+
+d1 <- rbind(d1, d1.1) %>% 
+  rename(ID = Participant, RT = Reaction_time)
+  
+
+# Create csv in shared folder
+write.csv(d1,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp1_collected_data.csv", row.names = FALSE)
+
+```
+
+Data tidying
+```{r}
+
+# Set new WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske")
+d1 <- read_csv("exp1_collected_data.csv")
+
+# Change column categories
+d1 <- d1 %>% 
+  mutate(
+    ID = as.factor(ID),
+    Age = as.factor(Age),
+    Gender = as.factor(Gender),
+    Block = as.factor(Block),
+    Drawing = as.factor(Drawing),
+    Chain = as.factor(Chain),
+    Generation = as.factor(Generation),
+    Response = as.factor(Response),
+    Correct_response = as.factor(Correct_response),
+    Correctness = as.factor(Correctness)
+  )
+
+
+# Check datapoints per IDs
+nrow(d1) - (144 * length(unique(d1$ID)))
+check <- d1 %>% group_by(ID, Block) %>% summarize(n()) 
+names(check)[3] <- "count"
+check %>% filter(count > 48) 
+# We have 4 too many rows
+
+
+# Remove NaN's, negative RT's, and wrong answers
+d1 <- d1 %>% subset(RT > 0) %>% subset(Correctness != "NaN") %>% subset(Correctness == 1)
+
+
+# Change values of generation in new colum to be -1, 0 or 1.
+d1$GenerationNumber <- as.numeric(gsub("g", "", d1$Generation))
+d1$GenerationNumber <- ifelse(d1$GenerationNumber == 1, -1, d1$GenerationNumber)
+d1$GenerationNumber <- ifelse(d1$GenerationNumber == 4, 0, d1$GenerationNumber)
+d1$GenerationNumber <- ifelse(d1$GenerationNumber == 8, 1, d1$GenerationNumber)
+
+
+# Make a standardized RT column
+d1$RT_standard <- d1$RT/max(d1$RT)
+hist(d1$RT_standard)
+hist(d1$RT)
+
+```
+
+Data visualisation
+```{r}
+
+#Plot of the data
+ggplot(d1, aes(Generation, RT)) + 
+  geom_point() +
+  geom_smooth(method=lm,aes(group = ID, color=ID), se=F) +
+  theme_classic()
+
+
+# Double-checking the RTs
+ggplot(d1,aes(RT)) + 
+  geom_density(alpha=0.3)
+
+# RTs standardized
+ggplot(d1,aes(RT_standard)) + 
+  geom_density(alpha=0.3)
+
+
+## By ID
+ggplot(d1,aes(RT)) + 
+  geom_density(aes(fill=ID,group=ID,color=ID),alpha=0.3) +
+  guides(fill=FALSE,group=FALSE,color=FALSE) +
+  NULL
+
+
+ggplot(subset(d1,Correctness == 1), aes(GenerationNumber,RT)) +
+  geom_violin() +
+  geom_beeswarm(aes(color=Generation))
+
+```
+
+
+
+# Run Models (Bayesian)
+
+## Linear and quadratic regression models (lognormal) RT ~ generation (on all data)
+```{r}
+# define chains, iter, and controls
+CHAINS = 4
+CORES = 4
+ITER = 4000
+WARMUP = 1000
+
+CONTROLS = list(
+  max_treedepth = 20,
+  adapt_delta=0.99)
+
+# Choose ID's for subsettign the data
+sub <- c(1, 2, 3, 4, 5, 6)
+
+# Models (linear)
+formula1.1 <- bf(RT ~ 1 + GenerationNumber + (1 + GenerationNumber | ID) + (1|Drawing))
+
+# Seems lognormally distributed constrained between 0 and 15.
+hist(d1$RT, breaks = 70, density = 20)
+
+get_prior(formula1.1, d1, family = lognormal())
+
+# set priors
+prior1.1 <- c(
+  prior(normal(0.5, 0.2), class = Intercept),
+  prior(normal(0, 0.5), class = b),
+  prior(normal(0, 0.2), class = sd),
+  prior(normal(0, 0.2), class = sigma),
+  prior(lkj(5), class = cor))
+
+
+### MODEL 1.1
+
+# prior
+m1.1_prior <- brm(
+   formula1.1,
+   subset(d1, ID %in% sub),
+   family = lognormal(),
+   prior = prior1.1,
+   sample_prior = "only",
+   chains = 1,
+   cores = 1,
+   iter = 200,
+   warmup = 100
+)
+
+pp_check(m1.1_prior, nsamples=100)
+
+# posterior
+m1.1 <- brm(
+  formula1.1,
+  d1,
+  family = lognormal(),
+  prior = prior1.1,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER,
+  warmup = WARMUP
+)
+
+pp_check(m1.1, nsamples=100)
+
+
+### MODEL 2
+
+# formula
+formula1.2 <- bf(RT ~ 1 + GenerationNumber + I(GenerationNumber)^2 + 
+                   (1 + GenerationNumber  + I(GenerationNumber)^2 | ID) + (1|Drawing))
+
+# prior
+m1.2_prior <- brm(
+   formula1.2,
+   subset(d1, ID %in% sub),
+   family = lognormal(),
+   prior = prior1.1,
+   sample_prior = "only",
+   chains = 1,
+   cores = 1,
+   iter = 200,
+   warmup = 100
+)
+
+pp_check(m1.2_prior, nsamples=100)
+
+# posterior
+m1.2 <- brm(
+  formula1.2,
+  d1,
+  family = lognormal(),
+  prior = prior1.1,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER,
+  warmup = WARMUP
+)
+
+
+pp_check(m1.2, nsamples=100)
+
+```
+
+Model 1.1. and 1.2 comparison
+```{r}
+m1.1 <- add_criterion(m1.1, criterion = c("bayes_R2", "loo"))
+m1.2 <- add_criterion(m1.2, criterion = c("bayes_R2", "loo"))
+
+exp1_compare1 <- loo_compare(m1.1, m1.2)
+exp1_weights1 <- loo_model_weights(m1.1,m1.2)
+
+
+exp1_compare1
+exp1_weights1
+
+```
+
+Report best model
+```{r}
+
+# summaries
+summary(m1.1)
+summary(m1.2)
+
+# hypothesis testing
+hypothesis(m1.1, "GenerationNumber < 0") # no significant effect, however effect in the right direction
+plot(hypothesis(m1.1, "GenerationNumber < 0"))
+
+
+
+
+# remember trace plots etc.
+plot(m1.1)
+plot(m1.2)
+
+```
+
+
+
+## Control for Chain (model 1.3 and 1.4)
+
+Pre-process the data --> make new chain column
+```{r}
+# Make chain group column
+d1$chainGroup <- NA
+d1$ID <- as.numeric(d1$ID)
+for (i in (1:nrow(d1))){
+  
+  if (d1$ID[i] <= 5) {
+    d1$chainGroup[i] <- 1
+    
+  } else if (d1$ID[i] > 5 & d1$ID[i] < 11) {
+    d1$chainGroup[i] <- 2
+    
+  } else if (d1$ID[i] > 10 & d1$ID[i] < 16) {
+    d1$chainGroup[i] <- 3
+    
+  } else if (d1$ID[i] > 15 & d1$ID[i] < 21) {
+    d1$chainGroup[i] <- 4
+    
+  } else if (d1$ID[i] > 20 & d1$ID[i] < 26) {
+    d1$chainGroup[i] <- 5
+    
+  } else if (d1$ID[i] > 25 & d1$ID[i] < 31) {
+    d1$chainGroup[i] <- 6
+    
+  } else if (d1$ID[i] > 30 & d1$ID[i] < 36) {
+    d1$chainGroup[i] <- 7
+    
+  } else if (d1$ID[i] > 35 & d1$ID[i] < 41) {
+    d1$chainGroup[i] <- 8
+    
+  } else if (d1$ID[i] > 40 & d1$ID[i] < 46) {
+    d1$chainGroup[i] <- 9
+    
+  } else if (d1$ID[i] > 45 & d1$ID[i] < 51) {
+    d1$chainGroup[i] <- 10
+    
+  } else if (d1$ID[i] > 50 & d1$ID[i] < 56) {
+    d1$chainGroup[i] <- 11
+    
+  } else { # In case we add 56-61 (which had the pictures from group 1)
+    d1$chainGroup[i] <- 1
+  }
+}
+
+
+# move df to old df
+d1$Chain <- as.character(d1$Chain)
+d1_old <- d1
+
+# Create empty df
+d1 <- d1[0,]
+
+# Use chain group column to loop through them one by one and overwrite chains with a dummy.
+for (i in 1:length(unique(d1_old$chainGroup))){
+  
+  # subset data
+  sub <- d1_old %>% subset(chainGroup == i)
+  
+  sub$chainD <- sub$Chain
+  
+  # change chains to a dummy by chaingroup
+  sub$chainD <- as.numeric(as.factor(sub$chainD))
+  sub$chainD <- sub$chainD - 1
+  
+  # Combine with premade empty dataframe
+  if (nrow(d1) == 0) {
+    d1 <- sub
+    } else {
+        d1 <- rbind(d1, sub)}
+
+}
+
+
+# change chain to be a factor
+d1$chainD <- as.factor(d1$chainD)
+
+```
+
+Run the models
+```{r}
+
+# Models (linear)
+formula1.3 <-  bf(RT ~ 1 + GenerationNumber + chainD + (1 + GenerationNumber + chainD | ID) + (1 | Drawing))
+
+get_prior(formula1.3, d1, family = lognormal())
+
+# set priors
+prior1.3 <- c(
+  prior(normal(0.5, 0.2), class = Intercept),
+  prior(normal(0, 0.5), class = b),
+  prior(normal(0, 0.2), class = sd),
+  prior(normal(0, 0.2), class = sigma),
+  prior(lkj(5), class = cor))
+
+# Choose ID's for subsettign the data
+sub <- c(1, 2, 3, 4, 5, 6)
+
+### MODEL 1.1
+
+# prior
+m1.3_prior <- brm(
+   formula1.3,
+   data = subset(d1, ID %in% sub),
+   family = lognormal(),
+   prior = prior1.3,
+   sample_prior = "only",
+   chains = 1,
+   cores = 1,
+   iter = 200,
+   warmup = 100
+)
+
+pp_check(m1.3_prior, nsamples=100)
+
+# posterior
+m1.3 <- brm(
+  formula1.3,
+  d1,
+  family = lognormal(),
+  prior = prior1.3,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER,
+  warmup = WARMUP
+)
+
+pp_check(m1.3, nsamples=100)
+
+
+### MODEL 4
+
+# formula
+formula1.4 <-  bf(RT ~ 1 + GenerationNumber*chainD + (1 + GenerationNumber*chainD | ID) + (1 | Drawing))
+
+# prior
+m1.4_prior <- brm(
+   formula1.4,
+   subset(d1, ID %in% sub),
+   family = lognormal(),
+   prior = prior1.3,
+   sample_prior = "only",
+   chains = 1,
+   cores = 1,
+   iter = 200,
+   warmup = 100
+)
+
+pp_check(m1.4_prior, nsamples=100)
+
+# posterior
+m1.4 <- brm(
+  formula1.4,
+  d1,
+  family = lognormal(),
+  prior = prior1.3,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER,
+  warmup = WARMUP
+)
+
+
+pp_check(m1.4, nsamples=100)
+
+```
+
+Model 1.3. and 1.4 comparison
+```{r}
+m1.3 <- add_criterion(m1.3, criterion = c("bayes_R2", "loo"))
+m1.4 <- add_criterion(m1.4, criterion = c("bayes_R2", "loo"))
+
+exp1_compare2 <- loo_compare(m1.3, m1.4)
+exp1_weights2 <- loo_model_weights(m1.3, m1.4)
+
+exp1_compare3 <- loo_compare(m1.1, m1.3, m1.4)
+exp1_weights3 <- loo_model_weights(m1.1, m1.3, m1.4)
+
+
+exp1_weights3
+
+```
+
+Report best model
+```{r}
+
+# summaries
+summary(m1.3)
+summary(m1.4)
+
+# hypothesis testing
+hypothesis(m1.3, "GenerationNumber < 0") 
+plot(hypothesis(m1.3, "GenerationNumber < 0"))
+
+hypothesis(m1.4, "GenerationNumber < 0") 
+plot(hypothesis(m1.4, "GenerationNumber < 0"))
+
+
+# remember trace plots etc.
+plot(m1.3)
+plot(m1.4)
+
+```
+
+
+## Control for problematic pictures and ID
+```{r}
+
+# control for problematic pictures. list of problematic stimuli (subjectively selected by Aske)
+problemPics <- c("i3_c104_g8_id16", "i3_c104_g4_id12", "i3_c104_g1_id9",
+                 "i4_c102_g4_id15", "i4_c102_g8_id315", "i4_c102_g1_",
+                 "i4_c108_g4_id48", "i4_c108_g8_id52", "i4_c108_g1_id45",
+                 "i3_c103_g8_id8", "i3_c103_g4_id4", "i3_c103_g1_id1")
+
+# update the 4 first models (those we will look at)
+m1.5 <- update(m1.1, newdata = subset(d1, !Drawing %in% problemPics))
+m1.6 <- update(m1.2, newdata = subset(d1, !Drawing %in% problemPics))
+m1.7 <- update(m1.3, newdata = subset(d1, !Drawing %in% problemPics))
+m1.8 <- update(m1.4, newdata = subset(d1, !Drawing %in% problemPics))
+
+# Do the same excludign problemtic ID's as well
+
+# ID: 10, 11, 12, 13, 30, 42, 43, 56(1) exclude block 1.
+probID <- c(10, 11, 12, 13, 30, 42, 43, 56)
+d1_probID <- d1 %>% subset(!ID %in% probID) %>% subset(!Drawing %in% problemPics)
+
+ID56 <- d1 %>% subset(!Drawing %in% problemPics) %>% filter(ID == 56 & Block != 1)
+d1_probID <- rbind(d1_probID, ID56)
+
+# update models
+m1.9 <- update(m1.1, newdata = d1_probID)
+m1.10 <- update(m1.2, newdata = d1_probID)
+m1.11 <- update(m1.3, newdata = d1_probID)
+m1.12 <- update(m1.4, newdata = d1_probID)
+
+
+```
+
+Model comparison
+```{r}
+
+m1.5 <- add_criterion(m1.5, criterion = c("bayes_R2", "loo"))
+m1.6 <- add_criterion(m1.6, criterion = c("bayes_R2", "loo"))
+m1.7 <- add_criterion(m1.7, criterion = c("bayes_R2", "loo"))
+m1.8 <- add_criterion(m1.8, criterion = c("bayes_R2", "loo"))
+m1.9 <- add_criterion(m1.9, criterion = c("bayes_R2", "loo"))
+m1.10 <- add_criterion(m1.10, criterion = c("bayes_R2", "loo"))
+m1.11 <- add_criterion(m1.11, criterion = c("bayes_R2", "loo"))
+m1.12 <- add_criterion(m1.12, criterion = c("bayes_R2", "loo"))
+
+# compare models excluding prob pics
+exp1_compare4 <- loo_compare(m1.5, m1.6)
+exp1_weights4 <- loo_model_weights(m1.5, m1.6)
+
+exp1_compare5 <- loo_compare(m1.7, m1.8)
+exp1_weights5 <- loo_model_weights(m1.7, m1.8)
+
+exp1_compare6 <- loo_compare(m1.5, m1.7, m1.8)
+exp1_weights6 <- loo_model_weights(m1.5, m1.7, m1.8)
+
+exp1_compare4
+exp1_weights4
+
+
+# Compare models ecluding both problematic ID's and pics
+exp1_compare7 <- loo_compare(m1.9, m1.10)
+exp1_weights7 <- loo_model_weights(m1.9, m1.10)
+
+exp1_compare8 <- loo_compare(m1.11, m1.12)
+exp1_weights8 <- loo_model_weights(m1.11, m1.12)
+
+exp1_compare9 <- loo_compare(m1.9, m1.11, m1.12)
+exp1_weights9 <- loo_model_weights(m1.9, m1.11, m1.12)
+
+
+```
+
+
+
+# Report overall best model (wednesday) --> without prob pics.
+```{r}
+# Summaries
+
+# most simple model (the one to be reported) 
+summary(m1.5)
+plot(m1.5)
+pp_check(m1.5_prior, nsamples=100)
+
+fixef(m1.5)
+
+# recalculate estimates to seconds to be more interpretable
+exp(0.34)
+
+exp(0.34-0.01)
+
+exp(0.34-0.01-0.01)
+
+exp1_compare6
+exp1_weights6
+
+hypothesis(m1.5, "GenerationNumber < 0")
+plot(hypothesis(m1.5, "GenerationNumber < 0"))
+
+
+# - linear regression model contrlling for ChainGroup
+summary(m1.7)
+hypothesis(m1.7, "GenerationNumber < 0")
+hypothesis(m1.7, "chainD1 < 0")
+
+
+
+# with interaction
+summary(m1.8)
+
+
+# without prob ID's
+summary(m1.9)
+summary(m1.10)
+summary(m1.11)
+summary(m1.12)
+
+
+
+
+```
+
+
+
+
+# Plots
+```{r}
+
+# Create summary dataset for visualisation
+
+plotSum1 <- d1 %>% group_by(ID, GenerationNumber) %>% summarise(
+  RTmean = mean(RT)
+)
+
+plotSum1$ID <- as.factor(plotSum1$ID)
+plotSum1$GenerationNumber <- as.numeric(plotSum1$GenerationNumber)
+
+Exp1_MainPlot <- ggplot(plotSum1, aes(GenerationNumber, RTmean)) + 
+  geom_line(aes(group=ID,color=ID),alpha=0.6) +
+  geom_point(aes(group=ID,color=ID),alpha=0.6)+
+  geom_smooth(method=lm, color = "red") +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = c(-1,0,1), labels=c("1st","4th","8th")) +
+
+  # THEMES
+  theme_grey() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position="top",
+    plot.subtitle=element_text(face="italic",size=14,colour="grey40"),
+    plot.title=element_text(size=21,face="bold")) +
+  labs(title="\nExperiment 1",
+       subtitle="Saliency",
+       x=expression("Generation"),
+       y=expression("Time to Emerge (seconds)")) +
+  NULL
+  
+Exp1_MainPlot
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

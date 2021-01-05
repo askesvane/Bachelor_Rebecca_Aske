@@ -1,0 +1,810 @@
+---
+title: "experiment5"
+author: "Aske & Rebecca"
+date: "6 October 2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+EXPERIMENT 5 - Discriminability
+
+Load packages
+```{r}
+# packages
+pacman::p_load(tidyverse,lmerTest,ggbeeswarm, brms, rethinking)
+
+```
+
+
+Collect data from several csv files and write a new csv file
+```{r}
+
+# WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp5_data")
+
+
+# import data from several csv files
+fileList5 <- list.files(full.names = T, pattern =".csv")
+
+d5 <- map_dfr(fileList5, read_csv) %>% 
+  mutate(
+    Participant = as.factor(Participant),
+    Age = as.factor(Age),
+    Gender = as.factor(Gender),
+    Trial = as.factor(Trial),
+    Stimulus1 = as.factor(Stimulus1),
+    Stimulus2 = as.factor(Stimulus2),
+    Target = as.factor(Target),
+    Response = as.factor(Response)
+  )
+
+
+# Create csv in shared folder
+write.csv(d5,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp5_collected_data.csv", row.names = FALSE)
+
+
+```
+
+
+# Import collected data
+```{r}
+# WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske")
+
+# Import collected data
+d5_old <- read_csv("exp5_collected_data.csv")
+
+## For ID 56-60
+
+# set WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp5_data/1-6")
+
+# import data from several csv files
+fileList5.2 <- list.files(full.names = T, pattern =".csv")
+list2 <- lapply(fileList5.2, read_csv)
+d5.2 <- do.call(rbind, list2)
+
+
+```
+
+Gather old df and 1-6
+```{r}
+# change participant number before merging
+d5.2$Participant <- as.numeric(d5.2$Participant)
+d5.2$Participant <- d5.2$Participant + 55
+
+# rbind them
+d5 <- rbind(d5_old,d5.2)
+
+# Create csv in shared folder
+write.csv(d5,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp5_collected_data_preprocessed.csv", row.names = FALSE)
+
+```
+
+Flip the the 'correct column' in the cases, where it is clearly opposite
+```{r}
+
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske")
+d5 <- read_csv("exp5_collected_data_preprocessed.csv")
+
+# summarise showing that there are IDs with flipped 0's and 1's in Correct column
+correctness <- d5 %>% group_by(Participant) %>% 
+  summarise(
+    correctness = mean(Correct)
+  )
+correctness
+
+
+# Make list of problematic IDs
+fails <- correctness %>% filter(correctness < 0.2)
+
+# Create empty df with correct rows
+d5_clean <- d5[0,]
+
+# Loop correcting the 0's and 1's.
+for (id in 1:length(unique(d5$Participant))){
+  
+  # Make subset for each participant
+  ID <- dplyr::filter(d5, Participant == id)
+  
+  
+  if (id %in% c(fails$Participant) == TRUE){
+    
+    ID$Correct[ID$Correct == 0] <- 0.9
+    ID$Correct[ID$Correct == 1] <- 0.1
+    
+    ID$Correct[ID$Correct == 0.1] <- 0
+    ID$Correct[ID$Correct == 0.9] <- 1
+    
+  }
+  
+  # Combine with premade empty dataframe
+       if (nrow(d5_clean) == 0) {
+         d5_clean <- ID
+         } else {
+         d5_clean <- rbind(d5_clean, ID)}
+  
+}
+
+
+
+# Save the old data in a placeholder 
+d5_old <- d5
+
+# overwrite d5 with the new data
+d5 <- d5_clean
+
+
+```
+
+Create chainGroup and StimPair columns
+```{r}
+
+# Change to factors
+d5$Correct <- as.factor(d5$Correct)
+# No reaction times under 0.2
+d5 <- subset(d5,Reaction_time > 0.2)
+
+
+
+### CREATE chainGroup column - Loop through and add chain group ID
+d5$Participant <- as.numeric(d5$Participant)
+
+d5$chainGroup <- NA
+for (i in (1:nrow(d5))){
+  
+  if (d5$Participant[i] <= 5) {
+    d5$chainGroup[i] <- 1
+    
+  } else if (d5$Participant[i] > 5 & d5$Participant[i] < 11 | d5$Participant[i] == 61) {
+    d5$chainGroup[i] <- 2
+    
+  } else if (d5$Participant[i] > 10 & d5$Participant[i] < 16) {
+    d5$chainGroup[i] <- 3
+    
+  } else if (d5$Participant[i] > 15 & d5$Participant[i] < 21) {
+    d5$chainGroup[i] <- 4
+    
+  } else if (d5$Participant[i] > 20 & d5$Participant[i] < 26) {
+    d5$chainGroup[i] <- 5
+    
+  } else if (d5$Participant[i] > 25 & d5$Participant[i] < 31) {
+    d5$chainGroup[i] <- 6
+    
+  } else if (d5$Participant[i] > 30 & d5$Participant[i] < 36) {
+    d5$chainGroup[i] <- 7
+    
+  } else if (d5$Participant[i] > 35 & d5$Participant[i] < 41) {
+    d5$chainGroup[i] <- 8
+    
+  } else if (d5$Participant[i] > 40 & d5$Participant[i] < 46) {
+    d5$chainGroup[i] <- 9
+    
+  } else if (d5$Participant[i] > 45 & d5$Participant[i] < 51) {
+    d5$chainGroup[i] <- 10
+    
+  } else if (d5$Participant[i] > 50 & d5$Participant[i] < 56) {
+    d5$chainGroup[i] <- 11
+    
+  } else { # In case we add 56-61 (which had the pictures from group 1)
+    d5$chainGroup[i] <- 1
+  }
+}
+
+# as factor
+d5$Participant <- as.factor(d5$Participant)
+d5$chainGroup <- as.factor(d5$chainGroup)
+
+# make orientation column with values constrained between 0 and 1
+d5$OriL = d5$Ori/max(d5$Ori)
+
+
+
+### Create StimPairID column 
+
+d5_new <- d5[0,] # make empty dataframe
+count = 1 # create count
+
+# the LOOP - add StimPairID column
+for (group in 1:length(unique(d5$chainGroup))){
+  
+  
+  ## for each chainGroup loop through and create StimPair unique ID
+  sub <- subset(d5, chainGroup == group)
+
+
+
+  # Create list of target pictures in the chain group (all 24 pics are represented in at least one participant)
+  stimuli <- unique(sub$Target)
+
+
+  x <- NULL
+  x <- data.frame(matrix(unlist(combn(stimuli, 2, simplify=F)), nrow=276, byrow=T)) # 276 = (24*24-24)/24
+  x$StimPairID <- seq(nrow(x))
+
+  # Loop adding stimPair value to the current subset
+  sub$StimPairID <- NA
+  
+  for (i in seq(nrow(x))){
+    sub$StimPairID[
+      (sub$Stimulus1 %in% x$X1[i] | sub$Stimulus1 %in% x$X2[i]) & 
+      (sub$Stimulus2 %in% x$X1[i] | sub$Stimulus2 %in% x$X2[i])] = x$StimPairID[i]
+  }
+
+  
+  # Add value so they all become unique across stim groups
+  sub$StimPairID <- sub$StimPairID + (1000 * count)
+  count <- count + 1
+  
+  
+  # Combine with premade empty dataframe
+  if (nrow(d5_new) == 0) {
+    d5_new <- sub
+    } else {
+        d5_new <- rbind(d5_new, sub)
+  }
+  
+}
+
+# Check 
+check <- d5_new %>% group_by(Participant) %>% summarise(
+  count = n(),
+  unikke = length(unique(StimPairID))
+)
+
+
+# Overwrite d5
+d5 <- d5_new
+
+```
+
+Create within chain dummy column and generationNUmber column
+```{r}
+
+# within chain
+d5$Stim1Chain <- substr(d5$Stimulus1, start = 5, stop = 7)
+d5$Stim2Chain <- substr(d5$Stimulus2, start = 5, stop = 7)
+
+d5$withinChain <- ifelse(d5$Stim1Chain == d5$Stim2Chain, 1, 0)
+
+
+# generationNumber column
+# Change values of generation in new colum to be -1, 0 or 1.
+d5$generationNumber <- as.numeric(d5$Generation_target)
+
+d5$generationNumber <- ifelse(d5$generationNumber == 1, -1, d5$generationNumber)
+d5$generationNumber <- ifelse(d5$generationNumber == 4, 0, d5$generationNumber)
+d5$generationNumber <- ifelse(d5$generationNumber == 8, 1, d5$generationNumber)
+
+
+# Save the final dataframe
+write.csv(d5,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp5_collected_data_preprocessed_FINAL.csv", row.names = FALSE)
+
+```
+
+
+# Modelling
+
+Remove bad pics
+```{r}
+# Import the completely pre-processed data
+d5_allPics <- read_csv("exp5_collected_data_preprocessed_FINAL.csv")
+
+# subset bad pics
+problemPics <- c("i3_c104_g8_id16", "i3_c104_g4_id12", "i3_c104_g1_id9",
+                 "i4_c102_g4_id15", "i4_c102_g8_id315", "i4_c102_g1_",
+                 "i4_c108_g4_id48", "i4_c108_g8_id52", "i4_c108_g1_id45",
+                 "i3_c103_g8_id8", "i3_c103_g4_id4", "i3_c103_g1_id1")
+
+d5 <- d5_allPics %>% 
+  subset(!Stimulus1 %in% problemPics) %>% 
+  subset(!Stimulus2 %in% problemPics) %>% 
+  subset(!Target %in% problemPics)
+
+
+d5 <- d5 %>% mutate(
+  Participant = as.factor(Participant),
+  Age = as.factor(Age),
+  Gender = as.factor(Gender),
+  Stimulus1 = as.factor(Stimulus1),
+  Stimulus2 = as.factor(Stimulus2),
+  Target = as.factor(Target),
+  chainGroup = as.factor(chainGroup),
+  Age = as.factor(Age),
+  StimPairID = as.factor(StimPairID)
+)
+
+d5_between <- subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0)
+d5_within <- subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1)
+
+
+```
+
+
+## Between chain
+```{r}
+
+# set values for running bayesian models
+CHAINS = 4
+CORES = 4
+ITER = 4000
+WARMUP = 1000
+
+
+# Formula5.1 - linear
+formula5.1 <- bf(Reaction_time ~ generationNumber + 
+                   (1 + generationNumber|Participant) + 
+                   (1|Target) + 
+                   (1|StimPairID))
+
+# Formula5.2 - quadratic
+formula5.2 <- bf(Reaction_time ~ generationNumber + I(generationNumber^2) + 
+                   (1 + generationNumber + I(generationNumber^2)|Participant) + 
+                   (1|Target) + 
+                   (1|StimPairID))
+
+
+# Set priors
+get_prior(formula5.1, d5, family = lognormal())
+
+prior5 <- c(
+  prior(normal(0.5, 0.2), class = Intercept),
+  prior(normal(0, 0.5), class = b),
+  prior(normal(0, 0.2), class = sd),
+  prior(normal(0, 0.2), class = sigma),
+  prior(lkj(5), class = cor))
+
+### MODEL A1 - Linear
+
+# prior
+m5.1a_prior <- brm(
+  formula5.1,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.1a_prior, nsamples=100)
+
+# model
+m5.1a <- brm(
+  formula5.1,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# post check
+pp_check(m5.1a, nsamples=100)
+
+
+
+
+### MODEL A2 - Quadratic
+
+# prior
+m5.2a_prior <- brm(
+  formula5.2,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.2a_prior, nsamples=100)
+
+# post
+m5.2a <- brm(
+  formula5.2,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# post check
+pp_check(m5.2a, nsamples=100)
+
+```
+
+
+### Results
+```{r}
+
+# Summaries
+summary(m5.1a)
+summary(m5.2a)
+
+
+# model LOOIC comparison
+m5.1a <- add_criterion(m5.1a, criterion = c("bayes_R2", "loo"))
+m5.2a <- add_criterion(m5.2a, criterion = c("bayes_R2", "loo"))
+
+exp5_compare1 <- loo_compare(m5.1a, m5.2a)
+exp5_weights1 <- loo_model_weights(m5.1a, m5.2a)
+
+exp5_compare1
+exp5_weights1
+
+# hypothesis testing
+hypothesis(m5.1a, "generationNumber < 0") 
+plot(hypothesis(m5.1a, "generationNumber < 0"))
+
+hypothesis(m5.2a, "generationNumber < 0") 
+plot(hypothesis(m5.2a, "generationNumber < 0"))
+
+
+# remember trace plots etc.
+plot(m5.1a)
+plot(m5.2a)
+
+
+```
+
+the simple linear model was found most credible --> we run analysis controlling for orientation on it.
+
+
+## Within chain
+```{r}
+
+### MODEL B1 - Linear
+
+#prior
+m5.1b_prior <- brm(
+  formula5.1,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.1b_prior, nsamples=100)
+
+
+m5.1b <- brm(
+  formula5.1,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# prior predictive check
+pp_check(m5.1b, nsamples=100)
+
+
+
+### MODEL B2 - Quadratic
+
+# prior
+m5.2b_prior <- brm(
+  formula5.2,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.2b_prior, nsamples=100)
+
+# model
+m5.2b <- brm(
+  formula5.2,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# prior predictive check
+pp_check(m5.2b, nsamples=100)
+
+
+```
+
+
+### Results
+```{r}
+
+# Summaries
+summary(m5.1b)
+summary(m5.2b)
+
+
+# model LOOIC comparison
+m5.1b <- add_criterion(m5.1b, criterion = c("bayes_R2", "loo"))
+m5.2b <- add_criterion(m5.2b, criterion = c("bayes_R2", "loo"))
+
+exp5_compare2 <- loo_compare(m5.1b, m5.2b)
+exp5_weights2 <- loo_model_weights(m5.1b, m5.2b)
+
+exp5_weights2
+
+
+# hypothesis testing
+hypothesis(m5.1b, "generationNumber < 0") 
+plot(hypothesis(m5.1b, "generationNumber < 0"))
+
+hypothesis(m5.2b, "generationNumber < 0") 
+plot(hypothesis(m5.2b, "generationNumber < 0"))
+
+
+# remember trace plots etc.
+plot(m5.1b)
+plot(m5.2b)
+
+
+```
+
+
+## Control for mental rotation by letting generation interact with OriL
+```{r}
+
+# define formula
+formula5.3 <- bf(Reaction_time ~ generationNumber * OriL + 
+                    (1 + generationNumber * OriL | Participant) + 
+                    (1 + OriL|Target) + 
+                    (1 + OriL|StimPairID))
+
+
+# Set priors
+get_prior(formula5.3, d5, family = lognormal())
+
+
+# A - between sites
+
+#prior
+m5.3a_prior <- brm(
+  formula5.3,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.3a_prior, nsamples=100)
+
+
+m5.3a <- brm(
+  formula5.3,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 0),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# prior predictive check
+pp_check(m5.3a, nsamples=100)
+
+
+
+# B - within sites
+
+# prior
+m5.3b_prior <- brm(
+  formula5.3,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = "only",
+  chains = 1,
+  cores = 1,
+  iter = 200)
+
+# prior predictive check
+pp_check(m5.3b_prior, nsamples=100)
+
+# model
+m5.3b <- brm(
+  formula5.3,
+  subset(d5, Same_generation == 1 & Correct==1 & withinChain == 1),
+  family = lognormal(),
+  prior = prior5,
+  sample_prior = T,
+  chains = CHAINS,
+  cores = CORES,
+  iter = ITER)
+
+# prior predictive check
+pp_check(m5.3b, nsamples=100)
+
+
+
+```
+
+
+### Results
+```{r}
+
+# Summaries
+summary(m5.3a)
+summary(m5.3b)
+
+
+# model LOOIC comparison
+m5.3a <- add_criterion(m5.3a, criterion = c("bayes_R2", "loo"))
+m5.3b <- add_criterion(m5.3b, criterion = c("bayes_R2", "loo"))
+
+exp5_compare3 <- loo_compare(m5.1a, m5.2a, m5.3a)
+exp5_weights3 <- loo_model_weights(m5.1a, m5.2a, m5.3a)
+
+exp5_compare4 <- loo_compare(m5.1b, m5.2b, m5.3b)
+exp5_weights4 <- loo_model_weights(m5.1b, m5.2b, m5.3b)
+
+exp5_weights3
+exp5_compare3
+# hypothesis testing
+
+
+# remember trace plots etc.
+plot(m5.3a)
+plot(m5.3b)
+
+
+# Hypothesis testinbg
+hypothesis(m5.3a, "generationNumber < 0")
+hypothesis(m5.3a, "OriL > 0")
+
+hypothesis(m5.3b, "generationNumber < 0")
+hypothesis(m5.3b, "OriL > 0")
+
+
+# Re calculate estimates in seconds to enhance interpretatibility
+
+# across chains
+exp(-0.22) # 1st generation
+exp(-0.22-0.08) # 4th generation
+exp(-0.22-0.08-0.08) # 8th generation
+
+# Within chains
+exp(-0.20) # 1st generation
+exp(-0.20-0.1) # 4th generation
+exp(-0.20-0.1-0.1) # 8th generation
+
+```
+
+
+
+
+
+
+
+
+# Plots
+```{r}
+
+# BETWEEN CHAIN (A)
+plotSum5a <- d5 %>% filter(withinChain == 0) %>% group_by(Participant, generationNumber) %>% summarise(
+  RTmean = mean(Reaction_time)
+)
+
+plotSum5a$Participant <- as.factor(plotSum5a$Participant)
+plotSum5a$generationNumber <- as.numeric(plotSum5a$generationNumber)
+library(font)
+p_load(extrafont, font)
+loadfonts(device = "win")
+windowsFonts(Times = windowsFont("TT Times New Roman"))
+
+theme_set(theme_bw(base_size=12, base_family='Times New Roman'))
+
+Exp5a_MainPlot <- ggplot(plotSum5a, aes(generationNumber, RTmean)) + 
+  geom_line(aes(group = Participant, color = Participant), alpha = 0.6) +
+  geom_point(aes(group = Participant, color = Participant), alpha = 0.6) +
+  geom_smooth(method=lm, color = "red") +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = c(-1,0,1), labels=c("1st","4th","8th")) +
+
+  # THEMES
+  theme_grey() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position="top",
+    plot.subtitle=element_text(face="italic",size=14,colour="grey40"),
+    plot.title=element_text(size=21,face="bold")) +
+  labs(title="\nExperiment 5a",
+       subtitle="Discriminability across Chains",
+       x=expression("Generation"),
+       y=expression("Time to Discriminate (seconds)")) +
+  NULL
+  
+Exp5a_MainPlot
+
+### WITHIN CHAIN (B)
+plotSum5b <- d5 %>% filter(withinChain == 1) %>% group_by(Participant, generationNumber) %>% summarise(
+  RTmean = mean(Reaction_time)
+)
+
+plotSum5b$Participant <- as.factor(plotSum5b$Participant)
+plotSum5b$generationNumber <- as.numeric(plotSum5b$generationNumber)
+
+Exp5b_MainPlot <- ggplot(plotSum5b, aes(generationNumber, RTmean)) + 
+  geom_line(aes(group = Participant, color = Participant), alpha = 0.6) +
+  geom_point(aes(group = Participant, color = Participant), alpha = 0.6) +
+  geom_smooth(method=lm, color = "red") +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = c(-1,0,1), labels=c("1st","4th","8th")) + 
+  
+  # THEMES
+  theme_grey() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position="top",
+    plot.subtitle=element_text(face="italic",size=14,colour="grey40"),
+    plot.title=element_text(size=21,face="bold")) +
+  labs(title="\nExperiment 5b",
+       subtitle="Discriminability within Chains",
+       x=expression("Generation"),
+       y=expression("Time to Discriminate (seconds)")) +
+  NULL
+
+  
+Exp5b_MainPlot
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

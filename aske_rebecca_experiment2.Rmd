@@ -1,0 +1,976 @@
+---
+title: "aske_rebecca_experiment2"
+author: "Aske & Rebecca"
+date: "7 October 2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Gather data
+
+Load packages, data, wd etc. 
+```{r}
+# packages
+pacman::p_load(brms, tidyverse,lmerTest,ggbeeswarm, lme4, rethinking, bayesplot)
+
+citation("rethinking")
+citation("bayesplot")
+
+# WD
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/Collected data/exp2_data")
+
+```
+
+Collect data from several csv files
+```{r}
+
+# import data from several csv files
+fileList2 <- list.files(full.names = T, pattern =".csv")
+list <- lapply(fileList2, read_csv)
+d2 <- do.call(rbind, list)
+
+d2 <- d2 %>% 
+  mutate(
+    ID = as.factor(ID),
+    age = as.factor(age),
+    gender = as.factor(gender),
+    left = as.factor(left),
+    right = as.factor(right),
+    chainL = as.factor(chainL),
+    chainR = as.factor(chainR),
+    responseL = as.factor(responseL),
+    responseR = as.factor(responseR),
+    generationL = as.factor(generationL),
+    generationR= as.factor(generationR),
+    chainPair = as.factor(chainPair),
+    reaction_time = reaction_time
+  )
+
+
+# Create csv in shared folder
+write.csv(d2,"C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske/exp2_collected_data.csv", row.names = FALSE)
+
+
+```
+
+
+## Preprocess data
+
+Load packages, wd, and data
+```{r}
+
+# packages
+pacman::p_load(tidyverse,lmerTest,ggbeeswarm, lme4, rethinking, brms)
+
+# set working directory
+setwd("C:/Users/askes/Dropbox/Bachelor - Aske og Rebecca/data_analysis/Bachelor_Rebecca_Aske")
+
+# import data from csv
+d2 <- read_csv("exp2_collected_data.csv")
+
+
+```
+
+Create stimPair column (look in one of the other scripts)
+```{r}
+# make empty dataframe
+d2_new <- d2[0,] 
+
+# create count
+count = 1 
+
+
+# the LOOP - add StimPairID column
+for (group in 1:length(unique(d2$chainPair))){
+  
+  
+  
+  ## for each chainpair loop through and create StimPair unique ID
+  sub <- subset(d2, chainPair == group)
+
+
+  # Create list of target pictures in the chain group (all 24 pics are represented in at least one participant)
+  stimuli1 <- unique(sub$left) %>% as.data.frame()
+  stimuli2 <- unique(sub$right) %>% as.data.frame()
+
+  stimuli3 <- rbind(stimuli1,stimuli2)
+  colnames(stimuli3)[1] <- "stim"
+
+  stimuli <- unique(stimuli3$stim)
+
+  x <- NULL
+  x <- data.frame(matrix(unlist(combn(stimuli, 2, simplify=F)), nrow=276, byrow=T)) # 276 = (24*24-24)/2
+  x$StimPairID <- seq(nrow(x))
+
+  # Loop adding stimPair value to the current subset
+  sub$StimPairID <- NA
+  
+  for (i in seq(nrow(x))){
+    sub$StimPairID[
+      (sub$left %in% x$X1[i] | sub$left %in% x$X2[i]) & 
+      (sub$right %in% x$X1[i] | sub$right %in% x$X2[i])] = x$StimPairID[i]
+  }
+  
+  # Add value so they all become unique across stim groups
+  sub$StimPairID <- sub$StimPairID + (1000 * count)
+  count <- count + 1
+  
+  
+  # Combine with premade empty dataframe
+  if (nrow(d2_new) == 0) {
+    d2_new <- sub
+    } else {
+        d2_new <- rbind(d2_new, sub)
+  }
+  
+}
+
+```
+
+remove trials of same generation forced choice
+```{r}
+# Remove
+d2 <- d2_new %>% subset(generationL != generationR)
+
+```
+
+Create ‘Distance’ column based on generationL
+```{r}
+
+# relevel as factor
+d2$generationL <- factor(d2$generationL, levels = c(1, 4, 8))
+d2$generationR <- factor(d2$generationR, levels = c(1, 4, 8))
+
+# when transformed from leveled factor; becomes 1, 2, and 3.
+d2$distance = as.numeric(d2$generationL)
+
+# subtract right from left
+d2$distance <- d2$distance - as.numeric(d2$generationR)
+
+# Change variable before running models
+d2$StimPairID <- as.factor(d2$StimPairID)
+d2$responseL <- as.factor(d2$responseL)
+d2$ID <- as.factor(d2$ID)
+
+```
+
+## Modelling
+```{r}
+
+
+
+# define chains, iter, and controls
+CHAINS = 2
+CORES = 2
+ITER = 1000
+
+CONTROLS = list(
+  max_treedepth = 20,
+  adapt_delta=0.99)
+
+# make subset
+sub <- c(6, 7, 8, 9, 10)
+
+# Bernoulli is the likelihood function  --> outcome is the log odds(?)
+
+
+### MODEL 0
+
+# Construct models
+formula2.0 <- bf(responseL ~ 1) #  + (1 + distance | ID) + (1 | StimPairID)
+
+# get priors to be set
+get_prior(formula2.0, d2, family = bernoulli())
+
+# set priors
+prior2 <- c(
+  prior(normal(0,1.5), class = Intercept)
+)
+
+
+p <- rnorm(10000, 0, 1.5) # p = distribution
+dens(p) # density plot (log odds)
+dens(inv_logit(p)) # probabiloity for rate --> this is a nice prior
+
+
+# Run model based on priors alone
+m2.0_prior <- brm(
+   formula2.0,
+   data = subset(d2, ID %in% sub),
+   family = bernoulli(),
+   prior = prior2,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.0_prior, nsamples=100)
+
+## Better pp_check
+y_pred <- posterior_linpred(m2.0_prior) # generate predictions from the model, but we dont want 0's and 1's , we want which rates are expected
+# we want linear predictions before it is linked into log-odds. 
+dens(inv_logit(y_pred)) # looks at the density now. Almost uniform distribution discounting extremes.
+
+# Run model
+m2.0 <- brm(
+   formula2.0,
+   data = subset(d2, ID %in% sub),
+   family = bernoulli(),
+   prior = prior2,
+   sample_prior = TRUE
+)
+
+summary(m2.0)
+
+# prior predictive check
+pp_check(m2.0, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.0)  
+dens(inv_logit(y_pred1))
+
+
+
+### Model 1
+
+#the model
+formula2.1 <- bf(responseL ~ 1 + distance + (1 + distance | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.1, d2, family = bernoulli())
+
+prior2.1 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.1_prior <- brm(
+   formula2.1,
+   data = d2, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.1,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.1_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.1_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.1 <- brm(
+   formula2.1,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.1,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.1, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.1)  
+dens(inv_logit(y_pred1))
+
+summary(m2.1)
+hypothesis(m2.1,"distance > 0")
+
+
+
+exp(0.45) # chance
+inv_logit(0.45 + 0.28) # probability
+inv_logit(0.45) 
+
+
+# remember trace plots etc.
+plot(m2.1)
+
+
+# hypothesis testing
+plot(hypothesis(m2.1,"distance > 0"))
+hypothesis(m2.1,"distance > 0")
+
+
+### Model 2
+
+# formula
+formula2.2 <- bf(responseL ~ 1 + distance + I(distance)^2 + (1 + distance + I(distance)^2 | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.2, d2, family = bernoulli())
+
+prior2.2 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.3), class = b),
+  prior(normal(0,0.2), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.2_prior <- brm(
+   formula2.2,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.2,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.2_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.2_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.2 <- brm(
+   formula2.2,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.2,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.2, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.2)  
+dens(inv_logit(y_pred1))
+
+summary(m2.2)
+exp() # chance
+inv_logit() # probability
+
+plot(m2.2)
+
+
+```
+
+
+Model comparison
+```{r}
+
+###
+m2.0 <- add_criterion(m2.0, criterion = c("bayes_R2", "loo"))
+m2.1 <- add_criterion(m2.1, criterion = c("bayes_R2", "loo"))
+m2.2 <- add_criterion(m2.2, criterion = c("bayes_R2", "loo"))
+
+
+loo_compare(m2.1, m2.2) # number tries to estimate out of sample error. Baelines to 0. Best model is 0.
+loo_model_weights(m2.1,m2.2)
+
+
+```
+
+
+## Controlling for problematic pictures 
+```{r}
+
+# list of problematic stimuli (subjectively selected by Aske)
+problemPics <- c("i3_c104_g8_id16", "i3_c104_g4_id12", "i3_c104_g1_id9",
+                 "i4_c102_g4_id15", "i4_c102_g8_id315", "i4_c102_g1_",
+                 "i4_c108_g4_id48", "i4_c108_g8_id52", "i4_c108_g1_id45",
+                 "i3_c103_g8_id8", "i3_c103_g4_id4", "i3_c103_g1_id1")
+
+# exclude problematic pictures in subset
+d2sub <- d2 %>% subset(!left %in% problemPics) %>% subset(!right %in% problemPics)
+
+
+
+### Model 3
+
+# get priors to be set
+get_prior(formula2.1, d2sub, family = bernoulli())
+
+prior2.3 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.3_prior <- brm(
+   formula2.1,
+   data = d2sub, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.3,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.3_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.3_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.3 <- brm(
+   formula2.1,
+   data = d2sub,
+   family = bernoulli(),
+   prior = prior2.3,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.3, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.3)  
+dens(inv_logit(y_pred1))
+
+summary(m2.3)
+hypothesis(m2.3,"distance > 0")
+
+
+
+exp(0.19) # chance
+inv_logit(0.19) # probability
+
+
+
+# remember trace plots etc.
+
+
+# hypothesis testing
+plot(hypothesis(m2.1,"distance > 0"))
+hypothesis(m2.1,"distance > 0")
+
+
+
+### Model 4
+
+# get priors to be set
+get_prior(formula2.2, d2sub, family = bernoulli())
+
+prior2.4 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.4_prior <- brm(
+   formula2.2,
+   data = d2sub, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.4,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.4_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.4_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.4 <- brm(
+   formula2.2,
+   data = d2sub,
+   family = bernoulli(),
+   prior = prior2.4,
+   sample_prior = TRUE
+)
+
+
+m2.3 <- add_criterion(m2.3, criterion = c("bayes_R2", "loo"))
+m2.4 <- add_criterion(m2.4, criterion = c("bayes_R2", "loo"))
+
+exp2_compare1 <- loo_compare(m2.3, m2.4)
+exp2_weights1 <- loo_model_weights(m2.3, m2.4)
+
+exp2_compare1
+exp2_weights1
+
+
+
+
+```
+
+
+## Controlling for Chain
+
+Pre-process the data --> make new chain column
+```{r}
+
+
+# move df to old df
+d2$chainL <- as.character(d2$chainL)
+d2_old <- d2
+
+# Create empty df
+d2 <- d2[0,]
+
+# Use chain group column to loop through them one by one and overwrite chains with a dummy.
+for (i in 1:length(unique(d2_old$chainPair))){
+  
+  # subset data
+  sub <- d2_old %>% subset(chainPair == i)
+  
+  sub$chainD <- sub$chainL
+  
+  # change chains to a dummy by chaingroup
+  sub$chainD <- as.numeric(as.factor(sub$chainD))
+  sub$chainD <- sub$chainD - 1
+  
+  # Combine with premade empty dataframe
+  if (nrow(d2) == 0) {
+    d2 <- sub
+    } else {
+        d2 <- rbind(d2, sub)}
+
+}
+
+
+# change chain to be a factor
+d2$chainD <- as.factor(d2$chainD)
+
+```
+
+Chain control with all data (model 5-6) 
+the simple model but two conditions - interaction or no interaction
+```{r}
+
+### Model 5
+
+#the model
+formula2.5 <- bf(responseL ~ 1 + distance + chainD + (1 + distance + chainD | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.5, d2, family = bernoulli())
+
+prior2.5 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.5_prior <- brm(
+   formula2.5,
+   data = d2, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.5,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.5_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.5_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.5 <- brm(
+   formula2.5,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.5,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.5, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.5)  
+dens(inv_logit(y_pred1))
+
+
+
+### Model 6
+
+# formula
+formula2.6 <- bf(responseL ~ 1 + distance*chainD  + (1 + distance*chainD | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.6, d2, family = bernoulli())
+
+prior2.6 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.3), class = b),
+  prior(normal(0,0.2), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.6_prior <- brm(
+   formula2.6,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.6,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.6_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.6_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.6 <- brm(
+   formula2.6,
+   data = d2,
+   family = bernoulli(),
+   prior = prior2.6,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.6, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.6)  
+dens(inv_logit(y_pred1))
+
+
+```
+
+Results
+```{r}
+summary(m2.5)
+summary(m2.3)
+#hypothesis(m2.5,"distance > 0")
+
+
+exp(0.45) # chance
+inv_logit(0.45 + 0.28) # probability
+
+
+
+# remember trace plots etc.
+plot(m2.5)
+
+
+# hypothesis testing
+#plot(hypothesis(m2.5,"distance > 0"))
+#hypothesis(m2.5,"distance > 0")
+
+
+
+summary(m2.6)
+#exp() # chance
+#inv_logit() # probability
+
+plot(m2.6)
+
+
+```
+
+
+Chain control without prob pics (model 7-8) - that is the best one
+```{r}
+
+
+# Overwrite the original subset, so it will include chainD as well.
+d2sub <- d2 %>% subset(!left %in% problemPics) %>% subset(!right %in% problemPics)
+
+### Model 7
+
+#the model
+formula2.7 <- bf(responseL ~ 1 + distance + chainD + (1 + distance + chainD | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.7, d2sub, family = bernoulli())
+
+prior2.7 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.7_prior <- brm(
+   formula2.7,
+   data = d2sub, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.7,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.7_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.7_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.7 <- brm(
+   formula2.7,
+   data = d2sub,
+   family = bernoulli(),
+   prior = prior2.7,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.7, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.7)  
+dens(inv_logit(y_pred1))
+
+
+
+
+### Model 8
+
+#the model
+formula2.8 <- bf(responseL ~ 1 + distance * chainD + (1 + distance * chainD | ID) + (1 | StimPairID))
+
+# get priors to be set
+get_prior(formula2.8, d2sub, family = bernoulli())
+
+prior2.8 <- c(
+  prior(normal(0,1.5), class = Intercept),
+  prior(normal(0,0.5), class = b),
+  prior(normal(0,0.3), class = sd),
+  prior(lkj(5), class = cor)
+)
+
+# Run prior model
+m2.8_prior <- brm(
+   formula2.8,
+   data = d2sub, #subset(d2, ID %in% sub)
+   family = bernoulli(),
+   prior = prior2.8,
+   sample_prior = "only"
+)
+
+# prior predictive check
+pp_check(m2.8_prior, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.8_prior)  
+dens(inv_logit(y_pred1))
+
+# Run model
+m2.8 <- brm(
+   formula2.8,
+   data = d2sub,
+   family = bernoulli(),
+   prior = prior2.8,
+   sample_prior = TRUE
+)
+
+# prior predictive check
+pp_check(m2.8, nsamples=100)
+
+## Better pp_check
+y_pred1 <- posterior_linpred(m2.8)  
+dens(inv_logit(y_pred1))
+
+```
+
+Results
+```{r}
+
+summary(m2.7)
+summary(m2.8)
+plot(hypothesis(m2.8,"distance > 0"))
+plot(m2.8)
+
+
+
+exp(0.19) # chance
+inv_logit(0.19) # probability
+
+
+
+# remember trace plots etc.
+
+
+# hypothesis testing
+#plot(hypothesis(m2.1,"distance > 0"))
+#hypothesis(m2.1,"distance > 0")
+
+
+
+
+```
+
+## Model comparisons
+```{r}
+# model contrlling for pics
+m2.3 <- add_criterion(m2.3, criterion = c("bayes_R2", "loo"))
+
+# models controlling for chain on all data
+m2.5 <- add_criterion(m2.5, criterion = c("bayes_R2", "loo"))
+m2.6 <- add_criterion(m2.6, criterion = c("bayes_R2", "loo"))
+
+# models controlling for chain on all data
+m2.7 <- add_criterion(m2.7, criterion = c("bayes_R2", "loo"))
+m2.8 <- add_criterion(m2.8, criterion = c("bayes_R2", "loo"))
+
+
+
+# first models
+exp2_compare1 <- loo_compare(m2.1, m2.2) 
+exp2_weights1 <- loo_model_weights(m2.1,m2.2)
+exp2_compare1
+exp2_weights1 # most simple model is better
+
+
+# control models for chain with all data
+exp2_compare2 <- loo_compare(m2.5, m2.6) 
+exp2_weights2 <- loo_model_weights(m2.5,m2.6)
+exp2_compare2
+exp2_weights2 # interaction control model is better
+
+
+# compare all models on all data
+exp2_compare3 <- loo_compare(m2.1, m2.2, m2.5, m2.6) 
+exp2_weights3 <- loo_model_weights(m2.1, m2.2, m2.5, m2.6)
+exp2_compare3
+exp2_weights3 # Control model with interaction effect was found most credible
+
+# compare best first model with the two control chain models
+exp2_compare4 <- loo_compare(m2.1, m2.5, m2.6) 
+exp2_weights4 <- loo_model_weights(m2.1, m2.5, m2.6)
+exp2_compare4
+exp2_weights4 #comparison without quadratic model --> again 2.6 is by far the best model
+
+# control models for chain without prob pics
+exp2_compare5 <- loo_compare(m2.7, m2.8) 
+exp2_weights5 <- loo_model_weights(m2.7,m2.8)
+exp2_compare5
+exp2_weights5
+
+# compare with the first not controlling for chain
+exp2_compare6 <- loo_compare(m2.3, m2.7, m2.8) 
+exp2_weights6 <- loo_model_weights(m2.3, m2.7, m2.8)
+exp2_compare6 
+exp2_weights6
+
+
+summary(m2.1)
+summary(m2.2)
+summary(m2.3)
+summary(m2.4)
+summary(m2.5)
+summary(m2.6)
+summary(m2.7)
+summary(m2.8)
+
+
+```
+
+
+# Reporting the best model
+```{r}
+
+# both controlling for problematic pictures and chain group
+summary(m2.8)
+hypothesis(m2.8, "distance:chainD1 > 0")
+
+# Relative effect scale, ignore baserate
+exp(0.51) #  the odds of selecting the left stimulus increase 67% when the predictor ‘distance’ increases one unit
+
+#absolute effect, take base rate into account
+inv_logit(0.37)
+inv_logit(0.37 + 0.51)
+inv_logit(0.37 + 0.51) - inv_logit(0.37) # A positive unit change in the predictor elicits a 11.5% increase in probability of choosing the left stimulus
+
+
+# great effect
+hypothesis(m2.8,"distance > 0")
+
+# no effects
+hypothesis(m2.8,"chainD1 > 0")
+hypothesis(m2.8,"distance:chainD1 > 0")
+
+# plot results
+plot(hypothesis(m2.8,"distance > 0")) # the priors do not seem too sceptical as the data does not try to escape it...
+
+plot(m2.8)
+
+conditional_effects(m2.8)
+
+```
+
+
+## Plots
+```{r}
+
+# Change response L back to numeric
+d2$responseL <- as.numeric(as.character(d2$responseL))
+
+# Create summary dataset for visualisation
+plotSum <- d2 %>% group_by(ID, distance) %>% summarise(
+  LeftChoice = mean(responseL)
+)
+
+
+library(pacman)
+p_load(extrafont)
+font_import(pattern="[T/t]imes")
+loadfonts(device="win")
+
+Exp2_MainPlot <- ggplot(plotSum, aes(distance, LeftChoice)) + 
+  geom_line(aes(group=ID,color=ID),alpha=0.6) +
+  geom_point(aes(group=ID,color=ID),alpha=0.6)+
+  geom_smooth(method=lm, color = "red") +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = c(-2, -1, 0, 1, 2),labels=c("-2","-1", "", "1", "2")) +
+  
+  # THEMES
+  theme_grey() +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position="top",
+    plot.subtitle=element_text(face="italic",size=14,colour="grey40"),
+    plot.title=element_text(size=21,face="bold")) +
+  labs(title="\nExperiment 2",
+       subtitle="Intentionality",
+       x=expression("Generation distance from right to left"),
+       y=expression("Rate of choosing the left stimulus")) +
+  NULL
+  
+Exp2_MainPlot 
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
